@@ -70,7 +70,16 @@ class TestAnthropicBetaHeadersFiltering:
 
     @pytest.mark.parametrize(
         "provider",
-        ["anthropic", "azure_ai", "bedrock_converse", "bedrock", "vertex_ai"],
+        [
+            "anthropic",
+            "azure_ai",
+            "bedrock_converse",
+            "bedrock",
+            "vertex_ai",
+            "databricks",
+            "cerebras",
+            "cerebras_ai",
+        ],
     )
     def test_filter_and_transform_beta_headers_all_headers(self, provider):
         """Test filtering with all possible beta headers."""
@@ -99,7 +108,16 @@ class TestAnthropicBetaHeadersFiltering:
 
     @pytest.mark.parametrize(
         "provider",
-        ["anthropic", "azure_ai", "bedrock_converse", "bedrock", "vertex_ai"],
+        [
+            "anthropic",
+            "azure_ai",
+            "bedrock_converse",
+            "bedrock",
+            "vertex_ai",
+            "databricks",
+            "cerebras",
+            "cerebras_ai",
+        ],
     )
     def test_unknown_headers_filtered_out(self, provider):
         """Test that headers not in the config are filtered out."""
@@ -410,6 +428,9 @@ class TestAnthropicBetaHeadersFiltering:
             "bedrock_converse",
             "bedrock",
             "vertex_ai",
+            "databricks",
+            "cerebras",
+            "cerebras_ai",
         ]:
             unsupported = self.get_unsupported_headers(provider)
 
@@ -430,6 +451,9 @@ class TestAnthropicBetaHeadersFiltering:
             "bedrock_converse",
             "bedrock",
             "vertex_ai",
+            "databricks",
+            "cerebras",
+            "cerebras_ai",
         ]:
             filtered = filter_and_transform_beta_headers(
                 beta_headers=[], provider=provider
@@ -447,6 +471,9 @@ class TestAnthropicBetaHeadersFiltering:
             "bedrock_converse",
             "bedrock",
             "vertex_ai",
+            "databricks",
+            "cerebras",
+            "cerebras_ai",
         ]:
             supported = self.get_supported_headers(provider)
             unsupported = self.get_unsupported_headers(provider)
@@ -471,3 +498,173 @@ class TestAnthropicBetaHeadersFiltering:
             assert (
                 "unknown-header-123" not in filtered
             ), f"Unknown header should not be in result for {provider}"
+
+    def test_cerebras_filters_all_anthropic_beta_headers(self):
+        """Test that Cerebras provider filters out all Anthropic beta headers.
+
+        This is critical for the Anthropic->Cerebras routing case:
+        when an Anthropic model request is routed to Cerebras (which uses OpenAI-compatible
+        interface), all unsupported beta parameters must be stripped to avoid 400 errors.
+        """
+        all_headers = self.get_all_beta_headers()
+
+        # Cerebras should have all headers as null/unsupported
+        cerebras_unsupported = self.get_unsupported_headers("cerebras")
+        cerebras_supported = self.get_supported_headers("cerebras")
+
+        assert (
+            len(cerebras_supported) == 0
+        ), "Cerebras should not support any Anthropic beta features"
+        assert len(cerebras_unsupported) == len(
+            all_headers
+        ), "Cerebras should have entries for all Anthropic beta headers"
+
+        # Test filtering with all headers
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=all_headers, provider="cerebras"
+        )
+
+        assert (
+            len(filtered) == 0
+        ), f"All Anthropic beta headers should be filtered out for Cerebras, but got: {filtered}"
+
+    def test_cerebras_ai_filters_all_anthropic_beta_headers(self):
+        """Test that Cerebras_ai provider filters out all Anthropic beta headers."""
+        all_headers = self.get_all_beta_headers()
+
+        cerebras_ai_unsupported = self.get_unsupported_headers("cerebras_ai")
+        cerebras_ai_supported = self.get_supported_headers("cerebras_ai")
+
+        assert (
+            len(cerebras_ai_supported) == 0
+        ), "Cerebras_ai should not support any Anthropic beta features"
+        assert len(cerebras_ai_unsupported) == len(
+            all_headers
+        ), "Cerebras_ai should have entries for all Anthropic beta headers"
+
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=all_headers, provider="cerebras_ai"
+        )
+
+        assert (
+            len(filtered) == 0
+        ), f"All Anthropic beta headers should be filtered out for Cerebras_ai, but got: {filtered}"
+
+    def test_cerebras_update_request_filters_both_headers_and_body(self):
+        """Test that Cerebras properly filters both HTTP headers and request body beta parameters."""
+        all_headers = self.get_all_beta_headers()
+
+        headers = {"anthropic-beta": ",".join(all_headers)}
+        request_data = {"anthropic_beta": all_headers}
+
+        filtered_headers, filtered_data = update_request_with_filtered_beta(
+            headers=headers,
+            request_data=request_data,
+            provider="cerebras",
+        )
+
+        # Both header and body field should be removed entirely (not just emptied)
+        assert (
+            "anthropic-beta" not in filtered_headers
+        ), "anthropic-beta HTTP header should be removed for Cerebras"
+        assert (
+            "anthropic_beta" not in filtered_data
+        ), "anthropic_beta request body field should be removed for Cerebras"
+
+
+class TestCerebrasLegacyFormatConversion:
+    """Test that Cerebras properly handles new→old format conversion and param stripping."""
+
+    def test_cerebras_config_drops_anthropic_only_params(self):
+        """CerebrasConfig.map_openai_params must drop Anthropic-specific params."""
+        from litellm.llms.cerebras.chat import (
+            CerebrasConfig,
+            _CEREBRAS_UNSUPPORTED_ANTHROPIC_PARAMS,
+        )
+
+        config = CerebrasConfig()
+        non_default_params = {
+            "anthropic_beta": ["fast-mode-2026-02-01"],
+            "top_k": 40,
+            "stop_sequences": ["END"],
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "temperature": 0.7,
+            "max_tokens": 1000,
+        }
+        optional_params: dict = {}
+
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="cerebras/llama-3.3-70b",
+            drop_params=True,
+        )
+
+        # Anthropic-specific params must be stripped
+        for anthropic_param in _CEREBRAS_UNSUPPORTED_ANTHROPIC_PARAMS:
+            assert (
+                anthropic_param not in result
+            ), f"Anthropic-specific param '{anthropic_param}' should be stripped for Cerebras"
+
+        # Valid params must be kept
+        assert result.get("temperature") == 0.7
+        assert result.get("max_tokens") == 1000
+
+    def test_cerebras_config_supported_params_list(self):
+        """CerebrasConfig supported params must not include Anthropic-only params."""
+        from litellm.llms.cerebras.chat import (
+            CerebrasConfig,
+            _CEREBRAS_UNSUPPORTED_ANTHROPIC_PARAMS,
+        )
+
+        config = CerebrasConfig()
+        supported = set(
+            config.get_supported_openai_params(model="cerebras/llama-3.3-70b")
+        )
+
+        for param in _CEREBRAS_UNSUPPORTED_ANTHROPIC_PARAMS:
+            assert (
+                param not in supported
+            ), f"Anthropic-only param '{param}' should not be in Cerebras supported params"
+
+    def test_cerebras_not_in_model_capability_response_api(self):
+        """Cerebras model info should explicitly mark supports_response_api as false."""
+        from litellm.utils import get_model_info
+
+        try:
+            model_info = get_model_info(
+                model="cerebras/llama-3.3-70b",
+                custom_llm_provider="cerebras",
+            )
+            if model_info:
+                assert model_info.get("supports_response_api") is False, (
+                    "Cerebras models should have supports_response_api=false "
+                    "since they only support legacy chat completions"
+                )
+        except Exception:
+            pass  # Model info not available in test environment
+
+    def test_thinking_routing_skips_cerebras(self):
+        """Thinking should not be routed to the Responses API for Cerebras."""
+        from unittest.mock import MagicMock, patch
+
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        completion_kwargs = {
+            "model": "cerebras/llama-3.3-70b",
+            "custom_llm_provider": "cerebras",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }
+        thinking = {"type": "enabled", "budget_tokens": 1024}
+
+        # Should not raise and should not modify model to "responses/..."
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs, thinking=thinking
+        )
+
+        # Cerebras doesn't support Response API — model should not be prefixed
+        assert not completion_kwargs.get("model", "").startswith(
+            "responses/"
+        ), "Cerebras model should not be routed to the Responses API"

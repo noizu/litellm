@@ -33,16 +33,51 @@ from .utils import AnthropicMessagesRequestUtils, mock_response
 # going through chat/completions.
 _RESPONSES_API_PROVIDERS = frozenset({"openai"})
 
+# Hostnames that definitely serve the OpenAI Responses API. Used when a user
+# routes "openai/..." through a third-party api_base — we only assume Responses
+# API support when the api_base is OpenAI's own domain.
+_OPENAI_RESPONSES_API_HOSTS = frozenset({"api.openai.com", "openai.com"})
 
-def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
+
+def _api_base_is_openai(api_base: Optional[str]) -> bool:
+    """True if api_base is unset or points at OpenAI's own domain."""
+    if not api_base:
+        return True  # no override = default OpenAI
+    from urllib.parse import urlparse
+
+    host = urlparse(api_base).hostname or ""
+    return host in _OPENAI_RESPONSES_API_HOSTS
+
+
+def _should_route_to_responses_api(
+    custom_llm_provider: Optional[str],
+    *,
+    api_base: Optional[str] = None,
+    supports_responses_api: Optional[bool] = None,
+) -> bool:
     """Return True when the provider should use the Responses API path.
 
     Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
     opt out and route OpenAI/Azure requests through chat/completions instead.
+
+    Explicit ``supports_responses_api=False`` in the model's litellm_params
+    forces the chat/completions path — required for OpenAI-compatible providers
+    like Cerebras that don't implement /v1/responses.
+
+    If ``custom_llm_provider == "openai"`` but ``api_base`` points at a
+    non-OpenAI host (e.g. api.cerebras.ai), default to chat/completions too,
+    since third-party OpenAI-compatible providers usually lack the Responses API.
     """
     if litellm.use_chat_completions_url_for_anthropic_messages:
         return False
-    return custom_llm_provider in _RESPONSES_API_PROVIDERS
+    if supports_responses_api is False:
+        return False
+    if custom_llm_provider not in _RESPONSES_API_PROVIDERS:
+        return False
+    # Provider is nominally "openai" but api_base is pointing at a third party.
+    if not _api_base_is_openai(api_base):
+        return False
+    return True
 
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -420,7 +455,11 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        if _should_route_to_responses_api(custom_llm_provider):
+        if _should_route_to_responses_api(
+            custom_llm_provider,
+            api_base=api_base,
+            supports_responses_api=kwargs.get("supports_responses_api"),
+        ):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 **_shared_kwargs
             )

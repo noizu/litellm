@@ -8541,6 +8541,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "supports_function_calling": true,
+        "supports_response_api": false,
         "supports_tool_choice": true
     },
     "cerebras/llama3.1-70b": {
@@ -8552,6 +8553,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "supports_function_calling": true,
+        "supports_response_api": false,
         "supports_tool_choice": true
     },
     "cerebras/llama3.1-8b": {
@@ -8563,6 +8565,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-07,
         "supports_function_calling": true,
+        "supports_response_api": false,
         "supports_tool_choice": true
     },
     "cerebras/gpt-oss-120b": {
@@ -8577,6 +8580,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
+        "supports_response_api": false,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -8591,6 +8595,7 @@
         "source": "https://inference-docs.cerebras.ai/support/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_response_api": false,
         "supports_tool_choice": true
     },
     "cerebras/zai-glm-4.6": {
@@ -8605,6 +8610,7 @@
         "source": "https://www.cerebras.ai/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_response_api": false,
         "supports_tool_choice": true
     },
     "cerebras/zai-glm-4.7": {
@@ -8618,6 +8624,7 @@
         "source": "https://www.cerebras.ai/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_response_api": false,
         "supports_tool_choice": true
     },
     "chatdolphin": {

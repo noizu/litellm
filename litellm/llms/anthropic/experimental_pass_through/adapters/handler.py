@@ -22,7 +22,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.utils import ModelResponse
-from litellm.utils import get_model_info
+from litellm.utils import ProviderConfigManager, get_model_info
 
 if TYPE_CHECKING:
     pass
@@ -31,6 +31,19 @@ if TYPE_CHECKING:
 # init adapter
 ANTHROPIC_ADAPTER = AnthropicAdapter()
 ########################################################
+
+
+_OPENAI_RESPONSES_API_HOSTS = frozenset({"api.openai.com", "openai.com"})
+
+
+def _api_base_is_openai(api_base: Optional[str]) -> bool:
+    """True when api_base is absent/empty or points at OpenAI."""
+    if not api_base:
+        return True
+    from urllib.parse import urlparse
+
+    host = urlparse(api_base).hostname or ""
+    return host in _OPENAI_RESPONSES_API_HOSTS
 
 
 class LiteLLMMessagesToCompletionTransformationHandler:
@@ -61,7 +74,23 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             except Exception:
                 custom_llm_provider = None
 
-        if custom_llm_provider != "openai":
+        # Only route to the Responses API for providers that support it natively.
+        # Providers like Cerebras only support legacy chat completions — for those,
+        # thinking is converted to reasoning_effort and dropped if unsupported.
+        if completion_kwargs.get("supports_responses_api") is False:
+            return
+        # Even when the provider (e.g. "openai") supports the Responses API,
+        # OpenAI-compatible backends pointed at a non-OpenAI host (Cerebras,
+        # Groq, etc.) do not. Skip routing when api_base points elsewhere.
+        if custom_llm_provider == "openai" and not _api_base_is_openai(
+            completion_kwargs.get("api_base")
+        ):
+            return
+        responses_config = ProviderConfigManager.get_provider_responses_api_config(
+            provider=custom_llm_provider or "",
+            model=completion_kwargs.get("model"),
+        )
+        if responses_config is None:
             return
 
         if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
@@ -181,8 +210,18 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 "include_usage": True,
             }
 
-        excluded_keys = {"anthropic_messages"}
+        # Anthropic's `output_config: {effort: ...}` is the Messages-API
+        # spelling of OpenAI's `reasoning_effort`. Translate it here (don't
+        # forward it raw) so it doesn't get shoved into `extra_body` by the
+        # OpenAI-compat forwarder and rejected by providers like Cerebras.
         extra_kwargs = extra_kwargs or {}
+        output_config = extra_kwargs.get("output_config")
+        if isinstance(output_config, dict):
+            effort = output_config.get("effort")
+            if effort and "reasoning_effort" not in completion_kwargs:
+                completion_kwargs["reasoning_effort"] = effort
+
+        excluded_keys = {"anthropic_messages", "output_config"}
         for key, value in extra_kwargs.items():
             if (
                 key == "litellm_logging_obj"

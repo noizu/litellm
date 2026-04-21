@@ -668,6 +668,51 @@ def _resolve_model_provider_for_responses(
     return model, custom_llm_provider
 
 
+# Hostnames that definitely serve the OpenAI Responses API (/v1/responses).
+# Used to detect when custom_llm_provider="openai" actually points at a
+# third-party OpenAI-compatible endpoint (Cerebras, Groq, etc.) that doesn't
+# implement /v1/responses.
+_OPENAI_RESPONSES_API_HOSTS = frozenset({"api.openai.com", "openai.com"})
+
+
+def _api_base_is_openai(api_base: Optional[str]) -> bool:
+    """True if api_base is unset or points at OpenAI's own domain."""
+    if not api_base:
+        return True
+    from urllib.parse import urlparse
+
+    host = urlparse(api_base).hostname or ""
+    return host in _OPENAI_RESPONSES_API_HOSTS
+
+
+def _resolve_responses_api_provider_config(
+    model: str,
+    custom_llm_provider: Optional[str],
+    api_base: Optional[str],
+    supports_responses_api: Optional[bool],
+) -> Optional[BaseResponsesAPIConfig]:
+    """Wrap ProviderConfigManager.get_provider_responses_api_config with
+    checks that force the chat/completions fallback path when:
+      * ``supports_responses_api=False`` is set in the model's litellm_params, or
+      * ``custom_llm_provider == "openai"`` but ``api_base`` points at a
+        third-party OpenAI-compatible host (e.g. api.cerebras.ai).
+
+    Returning ``None`` makes the caller fall through to
+    ``LiteLLMCompletionTransformationHandler``, which converts the Responses
+    API request to chat/completions and upgrades the response back.
+    """
+    if custom_llm_provider is None:
+        return None
+    if supports_responses_api is False:
+        return None
+    if custom_llm_provider == "openai" and not _api_base_is_openai(api_base):
+        return None
+    return ProviderConfigManager.get_provider_responses_api_config(
+        model=model,
+        provider=custom_llm_provider,
+    )
+
+
 def _apply_managed_file_id_mapping(
     input: Union[str, ResponseInputParam],
     tools: Optional[Iterable[ToolParam]],
@@ -841,17 +886,15 @@ def responses(
                 return aresponses_api_with_mcp(**mcp_call_kwargs)
             return run_async_function(aresponses_api_with_mcp, **mcp_call_kwargs)
 
-        # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig]
-        if custom_llm_provider is None:
-            responses_api_provider_config = None
-        else:
-            responses_api_provider_config = (
-                ProviderConfigManager.get_provider_responses_api_config(
-                    model=model,
-                    provider=custom_llm_provider,
-                )
+        # get provider config (honors supports_responses_api flag + api_base host check)
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            _resolve_responses_api_provider_config(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
+                supports_responses_api=kwargs.get("supports_responses_api"),
             )
+        )
 
         local_vars.update(kwargs)
         # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
@@ -1946,14 +1989,19 @@ async def _aresponses_websocket(
         custom_llm_provider=_custom_llm_provider,
     )
 
-    responses_api_provider_config: Optional[BaseResponsesAPIConfig] = None
-    if _custom_llm_provider is not None:
-        responses_api_provider_config = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=model,
-                provider=litellm.LlmProviders(_custom_llm_provider),
-            )
+    # honors supports_responses_api flag + api_base host check
+    responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+        _resolve_responses_api_provider_config(
+            model=model,
+            custom_llm_provider=_custom_llm_provider,
+            api_base=(
+                dynamic_api_base
+                or litellm_params.api_base
+                or litellm.api_base
+            ),
+            supports_responses_api=kwargs.get("supports_responses_api"),
         )
+    )
 
     resolved_api_base = (
         dynamic_api_base or litellm_params.api_base or litellm.api_base or None

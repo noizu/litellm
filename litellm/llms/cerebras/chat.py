@@ -1,20 +1,42 @@
 """
 Cerebras Chat Completions API
 
-this is OpenAI compatible - no translation needed / occurs
+Cerebras uses an OpenAI-compatible interface but only supports the legacy
+chat completions format (/v1/chat/completions). It does NOT support:
+  - OpenAI Responses API (/v1/responses)
+  - Newer OpenAI chat completion params (store, metadata, etc.)
+  - Anthropic-specific params (top_k, stop_sequences, thinking, etc.)
+
+When routing newer-format requests through Cerebras, LiteLLM uses
+LiteLLMCompletionTransformationHandler to downgrade the request to the
+legacy chat completions format and upgrade the response back to the
+expected format.
 """
 
-from typing import Optional
+from typing import Optional, Set
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.utils import supports_reasoning
+
+# Anthropic-specific params that must never be forwarded to Cerebras.
+# These are stripped by map_openai_params() since they're not in the
+# supported list, but this set is here for documentation and explicit
+# handling if the params ever arrive via a different code path.
+_CEREBRAS_UNSUPPORTED_ANTHROPIC_PARAMS: Set[str] = {
+    "anthropic_beta",
+    "top_k",
+    "stop_sequences",
+    "thinking",
+}
 
 
 class CerebrasConfig(OpenAIGPTConfig):
     """
     Reference: https://inference-docs.cerebras.ai/api-reference/chat-completions
 
-    Below are the parameters:
+    Cerebras supports legacy OpenAI chat completions only. Unsupported params
+    are silently dropped by map_openai_params(); the Responses API path is
+    handled via LiteLLMCompletionTransformationHandler (see responses/main.py).
     """
 
     max_tokens: Optional[int] = None
@@ -85,7 +107,11 @@ class CerebrasConfig(OpenAIGPTConfig):
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
-            if param == "max_completion_tokens":
+            if param in _CEREBRAS_UNSUPPORTED_ANTHROPIC_PARAMS:
+                # Explicitly drop Anthropic-specific params that should never
+                # reach Cerebras's OpenAI-compatible endpoint.
+                continue
+            elif param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param in supported_openai_params:
                 optional_params[param] = value

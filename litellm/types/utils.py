@@ -3125,6 +3125,11 @@ all_litellm_params = (
         "search_tool_name",
         "order",
         "enable_json_schema_validation",
+        # litellm-internal routing/capability flags. These must not leak
+        # into the upstream request body (otherwise OpenAI-compat providers
+        # like Cerebras reject the call or return a null-body response).
+        "supports_responses_api",
+        "clear_thinking",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())

@@ -1403,6 +1403,17 @@ class LiteLLMAnthropicMessagesAdapter:
                         return "thinking", ChatCompletionThinkingBlock(
                             type="thinking", thinking=thinking, signature=signature
                         )
+            # Fallback for providers (e.g. Cerebras, OpenRouter) that stream
+            # reasoning via `reasoning_content` rather than `thinking_blocks`.
+            # Must mirror the branch in _translate_streaming_openai_chunk_to_anthropic
+            # so the block type matches the delta type.
+            if (
+                isinstance(choice, StreamingChoices)
+                and getattr(choice.delta, "reasoning_content", None)
+            ):
+                return "thinking", ChatCompletionThinkingBlock(
+                    type="thinking", thinking="", signature=""
+                )
 
         return "text", TextBlock(type="text", text="")
 
